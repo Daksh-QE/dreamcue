@@ -41,6 +41,8 @@ seeds:
   list: [11, 22, 33]
 
 modal:
-  gpu: "MI300X"
+  # GPU: H100 chosen 2026-05-19 after Modal's public GPU list confirmed no
+  # MI300X (see docs/decisions.md). Reel framing updated accordingly.
+  gpu: "H100"
   timeout_s: 3600
   hard_cost_cap_usd: 25

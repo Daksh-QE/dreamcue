@@ -7,8 +7,14 @@ A running list of design and configuration calls that shape the experiment, with
 ### 2026-05-19 — Base vs. instruct: `Llama-3.2-1B-Instruct`
 Owner-confirmed. The framing ("AI interactions get a sleep cycle") is closer to instruct-style than base completion. Per PRD §8 decision 2, instruct was the recommended call. Going forward all references to "the model" mean `meta-llama/Llama-3.2-1B-Instruct` unless explicitly stated.
 
-### 2026-05-19 — Compute: AMD MI300X via Modal
-Owner-confirmed. PRD §5.1 + §8 decision 1. Phase 0 must verify ROCm/PEFT load on a Modal MI300X container before any sweep spend.
+### 2026-05-19 — Compute: Modal **H100** (NVIDIA / CUDA). AMD framing dropped.
+Owner-confirmed. The PRD originally specified an AMD MI300X endpoint with "in-kind support from AMD" and Phase 0 was supposed to verify ROCm/PEFT on Modal MI300X. However, Modal's public GPU lineup as of 2026-05-19 lists only NVIDIA GPUs (T4, L4, A10, L40S, A100/40-80GB, RTX-PRO-6000, H100, H200, B200) — no MI300X. The operator chose to fall back to Modal H100 and drop the "AMD gave me the compute" framing from the reel, rather than chase a separate AMD-direct endpoint or proceed with reel language that wouldn't hold up under recruiter/AMD-employee scrutiny.
+
+Downstream effects:
+- `modal_app.py` defaults `DREAMCUE_GPU="H100"` and uses a CUDA PyTorch image. The ROCm path is preserved for any future MI300X access.
+- `configs/default.yaml` `modal.gpu` set to `"H100"`.
+- `notes/reel-broll.md` reel hook rewritten — no AMD references.
+- `bitsandbytes` is still optional (Linux-only); we won't need 8-bit quantization at 1B + LoRA, so not loaded.
 
 ### 2026-05-19 — Parallelism: sequential arms, one Modal job at a time
 Owner-confirmed. Wall time is small for 1B + LoRA; integrity over speedup avoids races on checkpoint / dataset paths.

@@ -4,11 +4,14 @@ Per the operator: capture clean logs / telemetry / visually striking moments thr
 
 ## Capture targets
 
-- **GPU telemetry**: `rocm-smi` / `amd-smi` snapshots during the longest training segments (interference phase is the most visual — high sustained utilization).
+- **GPU telemetry**: `nvidia-smi` snapshots during the longest training segments (interference phase is the most visual — high sustained utilization).
 - **Training curves**: loss curves per arm, retention curves per arm. Save figures at 300 DPI and the raw CSV.
 - **The moment the no-replay arm collapses** under interference: a still or animation of the flagged-probe accuracy dropping. This is the "AI forgets" beat.
 - **The moment the cued arm holds while the no-replay arm collapses**: the "AI was told what mattered" beat.
-- **MI300X-specific framing**: AMD provided the compute. Phrase as "AMD gave me the compute" / "running on AMD hardware", NOT "AMD funded my research".
+
+## Framing change vs. PRD (2026-05-19)
+
+The PRD's reel hook leaned on "AMD gave me the compute." Compute moved to Modal H100 (NVIDIA) when Modal's public GPU list confirmed no MI300X (see `docs/decisions.md`). The hook needs to be rewritten — do NOT keep AMD language in the reel.
 
 ## Files to keep clean
 
@@ -18,6 +21,8 @@ Per the operator: capture clean logs / telemetry / visually striking moments thr
 
 ## Hook (locked once retention delta is real)
 
-> "I spent a year in a neuroscience lab studying how the brain saves memories during sleep. AMD gave me the compute to try the exact same thing on an AI — and the stuff I flagged as important survived [N]× longer."
+Draft (compute-agnostic, AMD line removed):
 
-`[N]×` stays unfilled until Phase 3 produces the headline number.
+> "I spent a year in a neuroscience lab studying how the brain saves memories during sleep. I tried the exact same trick on an AI — and the stuff I flagged as important survived [N]× longer."
+
+`[N]×` stays unfilled until Phase 3 produces the headline number. The flex about the compute partner is gone; if a sponsor framing is needed later, swap it in only with language that matches the actual arrangement.

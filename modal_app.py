@@ -1,16 +1,13 @@
 """Modal app for dreamcue.
 
-Per PRD §5.1 and §6 Phase 0, the target is an AMD MI300X endpoint via Modal.
-NOTE: as of this writing, Modal's publicly documented GPU types are NVIDIA-only
-(T4, L4, A10, L40S, A100, RTX-PRO-6000, H100, H200, B200). If MI300X is not
-available on the user's Modal workspace, the Phase 0 smoke test will fail at
-function attachment with a clear error from Modal — at which point we surface
-the fallback choice (private AMD endpoint, or H100 + a framing note for the
-reel) to the operator before any spend.
+GPU: Modal H100 (NVIDIA, CUDA). The PRD originally targeted an AMD MI300X
+endpoint but Modal's public GPU lineup does not include MI300X, so the
+operator confirmed on 2026-05-19 to run on Modal H100 and drop the AMD
+framing from the reel. See docs/decisions.md.
 
-Configure via env var DREAMCUE_GPU (default "MI300X"). The image picks a
-ROCm PyTorch base when DREAMCUE_GPU starts with "MI" (AMD), otherwise a CUDA
-PyTorch wheel. This keeps the same code path for both backends.
+The code still supports a ROCm path for completeness (DREAMCUE_GPU=MI*
+swaps to a rocm/pytorch base image) in case the operator gets MI300X
+access later. Default is H100/CUDA.
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ import os
 
 import modal
 
-DREAMCUE_GPU = os.environ.get("DREAMCUE_GPU", "MI300X")
+DREAMCUE_GPU = os.environ.get("DREAMCUE_GPU", "H100")
 IS_AMD = DREAMCUE_GPU.upper().startswith("MI")
 
 MODEL_NAME = os.environ.get("DREAMCUE_MODEL", "meta-llama/Llama-3.2-1B-Instruct")

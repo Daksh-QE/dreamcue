@@ -15,7 +15,7 @@ This is a benchmark, not a method. The deliverable is a measured answer.
 | Component | Choice |
 |-----------|--------|
 | Model | `meta-llama/Llama-3.2-1B-Instruct` (LoRA adapters, FP16) |
-| Compute | AMD MI300X via Modal.com |
+| Compute | Modal H100 (NVIDIA / CUDA) — see `docs/decisions.md` for the AMD-vs-H100 call |
 | Dataset | Synthetic key-value associations (~600 facts, 20% flagged, paraphrased probes, ~2000 interference facts) |
 | Arms | No-replay, Uniform replay, Cued replay (≥3 seeds each) |
 
