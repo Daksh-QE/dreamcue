@@ -58,11 +58,22 @@ else:
         .env({"DREAMCUE_BACKEND": "cuda"})
     )
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Mount the local package source and configs into the container so we can
+# import `dreamcue.*` and read configs/default.yaml without publishing a wheel.
+# `copy=False` (default) ships the files at container startup — fast iteration.
+image = image.add_local_dir(os.path.join(_HERE, "src"), remote_path="/root/src")
+image = image.add_local_dir(os.path.join(_HERE, "configs"), remote_path="/root/configs")
+
 app = modal.App("dreamcue", image=image)
 
 # Volume for caching HF model weights between runs so we don't re-download 2.4GB
 # every Modal cold start.
 hf_cache = modal.Volume.from_name("dreamcue-hf-cache", create_if_missing=True)
+
+# Volume for persisting Phase 1 / 2 artifacts (summaries, loss curves).
+results_volume = modal.Volume.from_name("dreamcue-results", create_if_missing=True)
 
 # HuggingFace token comes from a Modal Secret named "huggingface".
 # Create it once locally with:  modal secret create huggingface HF_TOKEN=hf_xxx
@@ -182,6 +193,188 @@ def smoke_test(dry_run: bool = False) -> dict:
     return info
 
 
+@app.function(
+    gpu=DREAMCUE_GPU,
+    timeout=TIMEOUT_S * 4,  # Phase 1 is longer than the smoke test
+    secrets=[hf_secret],
+    volumes={
+        "/root/.cache/huggingface": hf_cache,
+        "/root/results": results_volume,
+    },
+)
+def phase1_gate(
+    config_path: str = "/root/configs/default.yaml",
+    seed: int | None = None,
+    tiny: bool = False,
+) -> dict:
+    """Phase 1: learn-phase → no-replay interference → measure forgetting.
+
+    Returns:
+        dict with initial/final flagged accuracy, drop, gate_passed (bool),
+        and paths to artifacts on the results volume.
+
+    Args:
+        config_path: YAML config, defaults to the mounted configs/default.yaml.
+        seed: override config seed (used by Phase 2 to run multiple seeds).
+        tiny: shrink dataset + steps for a 1-2 minute end-to-end smoke run.
+            Use this before launching the full sweep — proves the wiring on
+            the actual GPU without burning the full budget.
+    """
+    import json
+    import os
+    import sys
+    import time
+
+    sys.path.insert(0, "/root/src")
+
+    import torch
+    import yaml
+    from peft import LoraConfig, TaskType, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from dreamcue.data.facts import build_learn_set
+    from dreamcue.data.interference import build_interference_set
+    from dreamcue.data.probes import build_probes
+    from dreamcue.training.learn_loop import train_learn_phase
+    from dreamcue.training.interference_loop import train_interference_phase
+
+    cfg = yaml.safe_load(open(config_path).read())
+
+    data_cfg = dict(cfg["data"])
+    learn_cfg = dict(cfg["learn_phase"])
+    inter_cfg = dict(cfg["interference_phase"])
+
+    if tiny:
+        data_cfg["n_learn_facts"] = 50
+        data_cfg["n_interference_facts"] = 200
+        learn_cfg["epochs"] = 3
+        inter_cfg["total_steps"] = 100
+        inter_cfg["checkpoint_every"] = 50
+
+    if seed is not None:
+        data_cfg["seed"] = seed
+
+    info: dict = {
+        "config_path": config_path,
+        "tiny": tiny,
+        "seed": data_cfg["seed"],
+        "model": cfg["model"]["name"],
+    }
+    t_total = time.time()
+
+    learn_facts = build_learn_set(
+        n_facts=data_cfg["n_learn_facts"],
+        flag_rate=data_cfg["flag_rate"],
+        seed=data_cfg["seed"],
+    )
+    probes = build_probes(
+        learn_facts,
+        paraphrases_per_fact=data_cfg["probe_paraphrases_per_fact"],
+        seed=data_cfg["seed"],
+    )
+    interference_facts = build_interference_set(
+        learn_facts,
+        n_facts=data_cfg["n_interference_facts"],
+        seed=data_cfg["seed"] + 1,
+    )
+    info["n_learn"] = len(learn_facts)
+    info["n_probes"] = len(probes)
+    info["n_interference"] = len(interference_facts)
+
+    # Model + tokenizer.
+    t0 = time.time()
+    tok = AutoTokenizer.from_pretrained(cfg["model"]["name"], token=os.environ["HF_TOKEN"])
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    tok.padding_side = "left"  # left-pad for generation
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg["model"]["name"],
+        torch_dtype=torch.float16,
+        token=os.environ["HF_TOKEN"],
+    )
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=cfg["lora"]["r"],
+        lora_alpha=cfg["lora"]["alpha"],
+        lora_dropout=cfg["lora"]["dropout"],
+        target_modules=cfg["lora"]["target_modules"],
+    )
+    model = get_peft_model(model, lora_config)
+    model.to("cuda")
+    info["model_load_seconds"] = round(time.time() - t0, 2)
+
+    # Learn phase.
+    learn_result = train_learn_phase(
+        model=model,
+        tokenizer=tok,
+        facts=learn_facts,
+        probes=probes,
+        epochs=learn_cfg["epochs"],
+        lr=learn_cfg["lr"],
+        batch_size=learn_cfg["batch_size"],
+        max_seq_len=learn_cfg["max_seq_len"],
+        target_probe_accuracy=learn_cfg["target_probe_accuracy"],
+    )
+    info["learn"] = {
+        "epochs_run": learn_result.epochs_run,
+        "final_flagged_acc": learn_result.final_flagged_acc,
+        "final_unflagged_acc": learn_result.final_unflagged_acc,
+        "seconds": round(learn_result.seconds, 1),
+        "eval_history": learn_result.eval_history,
+    }
+
+    # Interference phase (no replay — this is the forgetting-floor control).
+    inter_result = train_interference_phase(
+        model=model,
+        tokenizer=tok,
+        interference_facts=interference_facts,
+        learn_facts=learn_facts,
+        learn_probes=probes,
+        total_steps=inter_cfg["total_steps"],
+        lr=inter_cfg["lr"],
+        batch_size=inter_cfg["batch_size"],
+        max_seq_len=learn_cfg["max_seq_len"],
+        checkpoint_every=inter_cfg["checkpoint_every"],
+    )
+    drop = inter_result.flagged_drop() * 100  # absolute percentage points
+    info["interference"] = {
+        "steps_run": inter_result.steps_run,
+        "initial_flagged_acc": inter_result.initial_flagged_acc,
+        "final_flagged_acc": inter_result.final_flagged_acc,
+        "initial_unflagged_acc": inter_result.initial_unflagged_acc,
+        "final_unflagged_acc": inter_result.final_unflagged_acc,
+        "flagged_drop_pts": round(drop, 2),
+        "seconds": round(inter_result.seconds, 1),
+        "checkpoints": [
+            {"step": c.step, "flagged_acc": c.flagged_acc, "unflagged_acc": c.unflagged_acc}
+            for c in inter_result.checkpoints
+        ],
+    }
+
+    info["gate_passed"] = drop >= 25.0
+    info["gate_metric"] = "flagged_probe_accuracy_drop_pts >= 25"
+    info["total_seconds"] = round(time.time() - t_total, 1)
+
+    # Persist artifacts.
+    run_tag = f"phase1-seed{data_cfg['seed']}{'-tiny' if tiny else ''}"
+    out_dir = f"/root/results/{run_tag}"
+    os.makedirs(out_dir, exist_ok=True)
+    with open(f"{out_dir}/summary.json", "w") as f:
+        json.dump(info, f, indent=2)
+    with open(f"{out_dir}/learn_loss.csv", "w") as f:
+        f.write("step,loss\n")
+        for i, loss in enumerate(learn_result.train_loss_per_step):
+            f.write(f"{i},{loss}\n")
+    with open(f"{out_dir}/interference_loss.csv", "w") as f:
+        f.write("step,loss\n")
+        for i, loss in enumerate(inter_result.train_loss_per_step):
+            f.write(f"{i + 1},{loss}\n")
+    results_volume.commit()
+    info["artifacts_dir"] = out_dir
+
+    return info
+
+
 @app.local_entrypoint()
 def main(dry_run: bool = False):
     """Run the smoke test from your laptop:  modal run modal_app.py --dry-run"""
@@ -192,3 +385,34 @@ def main(dry_run: bool = False):
             print(f"\n[telemetry]\n{v}")
         else:
             print(f"  {k}: {v}")
+
+
+@app.local_entrypoint()
+def phase1(tiny: bool = False, seed: int | None = None):
+    """Run Phase 1: learn → no-replay interference → measure forgetting.
+
+    Usage:
+        modal run modal_app.py::phase1 --tiny        # 1-2 min wiring check
+        modal run modal_app.py::phase1               # full run on seed 1337
+        modal run modal_app.py::phase1 --seed 22     # alt seed
+    """
+    result = phase1_gate.remote(tiny=tiny, seed=seed)
+    print("=== Phase 1 gate ===")
+    print(f"  model:                {result['model']}")
+    print(f"  seed:                 {result['seed']}  tiny={result['tiny']}")
+    print(f"  n_learn / n_probes:   {result['n_learn']} / {result['n_probes']}")
+    print(f"  n_interference:       {result['n_interference']}")
+    learn = result["learn"]
+    print(f"  learn epochs:         {learn['epochs_run']}  "
+          f"flagged_acc={learn['final_flagged_acc']:.3f}  "
+          f"unflagged_acc={learn['final_unflagged_acc']:.3f}")
+    inter = result["interference"]
+    print(f"  interference steps:   {inter['steps_run']}")
+    print(f"  flagged acc:          {inter['initial_flagged_acc']:.3f} → "
+          f"{inter['final_flagged_acc']:.3f}  (drop {inter['flagged_drop_pts']:.1f} pts)")
+    print(f"  unflagged acc:        {inter['initial_unflagged_acc']:.3f} → "
+          f"{inter['final_unflagged_acc']:.3f}")
+    print(f"  GATE ({result['gate_metric']}): "
+          f"{'PASS' if result['gate_passed'] else 'FAIL'}")
+    print(f"  artifacts:            {result['artifacts_dir']}")
+    print(f"  total seconds:        {result['total_seconds']}")

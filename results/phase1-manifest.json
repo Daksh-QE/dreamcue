@@ -1,0 +1,46 @@
+{
+  "config_path": "/Users/tejas/dreamcue/configs/default.yaml",
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "learn": {
+    "n_facts": 600,
+    "n_flagged": 120,
+    "flag_rate": 0.2,
+    "approx_tokens": 3358,
+    "first_fact": [
+      "Yurnubkor",
+      "lives_in",
+      "Hexabrook"
+    ],
+    "last_fact": [
+      "Harvoroch",
+      "works_as",
+      "a quiet-room translator"
+    ]
+  },
+  "probes": {
+    "n_total": 600,
+    "n_flagged": 120,
+    "first_prompt": "Where does Yurnubkor reside? "
+  },
+  "interference": {
+    "n_facts": 2000,
+    "subject_overlap": 800,
+    "subject_overlap_rate": 0.4,
+    "approx_tokens": 11170
+  },
+  "replay_budget": {
+    "budget_tokens": 32768,
+    "oversampling_ratio": 5.0,
+    "token_match_tolerance": 0.01
+  },
+  "seeds": [
+    11,
+    22,
+    33
+  ],
+  "modal": {
+    "gpu": "H100",
+    "timeout_s": 3600,
+    "hard_cost_cap_usd": 25
+  }
+}
