@@ -1,0 +1,7 @@
+# Phase 0 GPU telemetry
+
+This file is populated by the Modal smoke test. It captures one rocm-smi (or
+nvidia-smi if we end up on a fallback GPU) snapshot during the dummy LoRA
+step. Kept in the repo as cheap B-roll for the reel.
+
+(empty — populated on first smoke-test run)
