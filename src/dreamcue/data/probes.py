@@ -7,6 +7,10 @@ would leak the answer through pretraining co-occurrence statistics.
 Each relation has a fixed pool of question templates that omit the object.
 The cloze answer is always the fact's `obj` string verbatim, so eval can
 exact-match against it.
+
+Probe templates are defined in ``facts.RelationConfig`` (the single
+source for all relation metadata). This module imports the template
+accessor rather than maintaining a separate dictionary.
 """
 
 from __future__ import annotations
@@ -14,43 +18,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from .facts import Fact
-
-
-# Templates per relation. Each template is a Python format string with a
-# single {subject} slot. The object MUST NOT appear anywhere in the template.
-_PROBE_TEMPLATES: dict[str, list[str]] = {
-    "lives_in": [
-        "Question: Where does {subject} live? Answer:",
-        "Q: What is the home settlement of {subject}? A:",
-        "Where does {subject} reside? ",
-        "Tell me the city of residence for {subject}:",
-    ],
-    "studies": [
-        "Question: What does {subject} study? Answer:",
-        "Q: What is the field of study of {subject}? A:",
-        "What discipline is {subject} pursuing? ",
-        "Name the subject that {subject} studies:",
-    ],
-    "owns": [
-        "Question: What does {subject} own? Answer:",
-        "Q: What object is in {subject}'s possession? A:",
-        "What does {subject} keep with them? ",
-        "Name the item owned by {subject}:",
-    ],
-    "speaks": [
-        "Question: What language does {subject} speak? Answer:",
-        "Q: Which tongue does {subject} use? A:",
-        "What does {subject} speak? ",
-        "Name the language of {subject}:",
-    ],
-    "works_as": [
-        "Question: What is {subject}'s occupation? Answer:",
-        "Q: What does {subject} do for work? A:",
-        "What is the trade of {subject}? ",
-        "Name the profession of {subject}:",
-    ],
-}
+from .facts import Fact, relation_probe_templates
 
 
 @dataclass(frozen=True)
@@ -73,7 +41,7 @@ def build_probes(
     rng = random.Random(seed)
     probes: list[Probe] = []
     for fact in facts:
-        templates = _PROBE_TEMPLATES[fact.relation]
+        templates = relation_probe_templates(fact.relation)
         if paraphrases_per_fact <= len(templates):
             chosen = rng.sample(templates, paraphrases_per_fact)
         else:

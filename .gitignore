@@ -55,3 +55,4 @@ results/checkpoints/
 
 # Modal
 .modal/
+.stratum/

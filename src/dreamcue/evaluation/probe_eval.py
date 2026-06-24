@@ -56,29 +56,19 @@ class ProbeRow:
     correct: bool
 
 
-def _extract_completion(full_decoded: str, prompt: str) -> str:
-    """The model returns prompt + completion; we want just the new tokens."""
-    if full_decoded.startswith(prompt):
-        return full_decoded[len(prompt):]
-    # Fallback: some tokenizers add a leading space to the BOS or strip
-    # whitespace inconsistently — split on the last prompt suffix we can find.
-    tail = prompt[-40:] if len(prompt) > 40 else prompt
-    idx = full_decoded.rfind(tail)
-    if idx >= 0:
-        return full_decoded[idx + len(tail):]
-    return full_decoded
-
-
 def evaluate_probes(
     model: "PreTrainedModel",
     tokenizer: "PreTrainedTokenizerBase",
     facts: list[Fact],
     probes: list[Probe],
     max_new_tokens: int = 16,
-    batch_size: int = 8,
+    batch_size: int = 64,
     device: str | None = None,
 ) -> dict[str, Any]:
     """Run greedy generation on every probe, return accuracy breakdown.
+
+    Uses token-ID slicing to extract only the newly generated tokens,
+    avoiding fragile string-based prompt stripping.
 
     Returns:
         {
@@ -111,6 +101,7 @@ def evaluate_probes(
                 max_length=256,
             ).to(device)
 
+            input_len = enc["input_ids"].shape[1]
             out = model.generate(
                 **enc,
                 max_new_tokens=max_new_tokens,
@@ -118,12 +109,15 @@ def evaluate_probes(
                 num_beams=1,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
             )
-            decoded = tokenizer.batch_decode(out, skip_special_tokens=True)
+            # Decode only the newly generated tokens (after the prompt),
+            # avoiding any fragile string-based prompt-stripping.
+            new_tokens = out[:, input_len:]
+            completions = tokenizer.batch_decode(new_tokens, skip_special_tokens=True)
 
-            for probe, prompt, full in zip(chunk, prompts, decoded):
+            for probe, completion in zip(chunk, completions):
                 fact = by_id[probe.fact_id]
                 gold = probe_gold_answer(probe, fact)
-                completion = _extract_completion(full, prompt).strip()
+                completion = completion.strip()
                 # Truncate the completion at the first newline — generation
                 # past the answer is treated as model wandering.
                 completion = completion.split("\n", 1)[0]
@@ -132,7 +126,7 @@ def evaluate_probes(
                         probe_id=probe.probe_id,
                         fact_id=probe.fact_id,
                         flagged=probe.flagged,
-                        prompt=prompt,
+                        prompt=probe_to_prompt(probe),
                         gold=gold,
                         pred=completion,
                         correct=exact_match(completion, gold),

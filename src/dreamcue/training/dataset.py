@@ -34,27 +34,31 @@ def encode_fact(
     import torch
 
     full = fact_to_training_string(fact)
-    # Split point: the object starts after the last predicate word + a space.
-    # We can find it deterministically by locating fact.obj in the full string.
     obj_start_char = full.find(fact.obj)
     assert obj_start_char > 0, f"render bug: object missing from {full!r}"
-    prefix = full[:obj_start_char]
 
-    full_ids = tokenizer(full, truncation=True, max_length=max_length, add_special_tokens=True)["input_ids"]
-    prefix_ids = tokenizer(prefix, truncation=True, max_length=max_length, add_special_tokens=True)["input_ids"]
+    # Single tokenization: use offset_mapping to find the exact token
+    # boundary where the object starts. This avoids a second tokenizer
+    # call and is more precise than a prefix-divergence heuristic.
+    enc = tokenizer(
+        full,
+        truncation=True,
+        max_length=max_length,
+        add_special_tokens=True,
+        return_offsets_mapping=True,
+    )
+    full_ids = enc["input_ids"]
+    offsets = enc["offset_mapping"]
 
-    # Tokenizers can produce slightly different lengths for prefix vs full
-    # due to merge boundaries — find the first divergence and mask everything
-    # before it.
-    mask_until = 0
-    for i, (a, b) in enumerate(zip(prefix_ids, full_ids)):
-        if a == b:
-            mask_until = i + 1
-        else:
+    # Find the first token whose character offset >= the object start.
+    first_obj_token = len(full_ids)  # default: don't mask
+    for i, (start, _end) in enumerate(offsets):
+        if start >= obj_start_char:
+            first_obj_token = i
             break
 
     labels = list(full_ids)
-    for i in range(min(mask_until, len(labels))):
+    for i in range(first_obj_token):
         labels[i] = -100
 
     return {
@@ -102,5 +106,13 @@ class FactDataset:
         return self.encoded[idx]
 
     def token_count(self) -> int:
-        """Total non-pad training tokens — used for replay-budget accounting."""
-        return sum(item["input_ids"].size(0) for item in self.encoded)
+        """Total *unmasked* training tokens — used for replay-budget accounting.
+
+        Only counts tokens where labels != -100 (the object tokens the model
+        is actually trained to predict). Counting raw input_ids would inflate
+        the budget by 2-3x from masked prefix tokens.
+        """
+        return sum(
+            (item["labels"] != -100).sum().item()
+            for item in self.encoded
+        )

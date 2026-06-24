@@ -4,23 +4,16 @@ Both training and eval go through this module so the formats can't drift.
 The instruct format mirrors Llama-3.2-Instruct chat-style with a minimal
 system message — keeps tokenization predictable without dragging in the
 full chat template machinery.
+
+Relation predicates are defined in ``facts.RelationConfig`` (the single
+source for all relation metadata). This module imports the predicate
+accessor rather than maintaining a separate dictionary.
 """
 
 from __future__ import annotations
 
-from .facts import Fact
+from .facts import Fact, relation_predicate
 from .probes import Probe
-
-
-# Relation → natural-language predicate for the training-time statement.
-# Kept terse so a single fact fits in <40 tokens including special tokens.
-_PREDICATES: dict[str, str] = {
-    "lives_in": "lives in",
-    "studies": "studies",
-    "owns": "owns",
-    "speaks": "speaks",
-    "works_as": "works as",
-}
 
 
 def fact_to_training_string(fact: Fact) -> str:
@@ -30,7 +23,7 @@ def fact_to_training_string(fact: Fact) -> str:
     Deliberately bland — we want the model to memorize the assertion, not
     learn a particular dialogue style.
     """
-    predicate = _PREDICATES[fact.relation]
+    predicate = relation_predicate(fact.relation)
     return f"Fact: {fact.subject} {predicate} {fact.obj}."
 
 
